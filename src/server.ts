@@ -96,7 +96,7 @@ type InternalPlan = 'STARTER' | 'PRO' | 'INACTIVE';
 interface PlanView {
     id: string;
     name: string;
-    status: 'active';
+    status: 'active' | 'inactive';
     maxProcesses: number;
     supportLevel: string;
     description: string;
@@ -1475,7 +1475,7 @@ app.post('/api/assinaturas/checkouts', requireAuth, async (req: Request, res: Re
     const { planId, paymentMethod, cardInfo, clientIp } = req.body;
     const authId = req.user?.id;
 
-    if (!authId) return sendError(res, 401, 'Não autorizado');
+    if (!authId) return sendError(res, 401, 'Não autorizado', 'Usuário não autenticado.');
 
     const internalPlanKey = Object.keys(PLAN_CATALOG).find(
         key => PLAN_CATALOG[key as InternalPlan].id === planId
@@ -1495,7 +1495,7 @@ app.post('/api/assinaturas/checkouts', requireAuth, async (req: Request, res: Re
         .single();
 
     if (advError || !advogado) {
-        return sendError(res, 404, 'Advogado não encontrado');
+        return sendError(res, 404, 'Advogado não encontrado', 'Os dados do advogado não foram encontrados.');
     }
 
     try {
@@ -1532,7 +1532,7 @@ app.post('/api/assinaturas/checkouts', requireAuth, async (req: Request, res: Re
             return res.status(201).json(result);
         } else if (paymentMethod === 'CARD') {
             if (!cardInfo || !clientIp) {
-                return sendError(res, 400, 'Dados do cartão ausentes');
+                return sendError(res, 400, 'Dados do cartão ausentes', 'Por favor, forneça as informações do cartão.');
             }
             const cardData: NexanoCardSubscriptionRequest = {
                 ...commonData,
@@ -1547,7 +1547,7 @@ app.post('/api/assinaturas/checkouts', requireAuth, async (req: Request, res: Re
             return res.status(201).json(result);
         }
 
-        return sendError(res, 400, 'Método de pagamento inválido');
+        return sendError(res, 400, 'Método de pagamento inválido', 'Os métodos aceitos são PIX e CARD.');
     } catch (error: any) {
         log('error', 'Erro ao criar assinatura na Nexano', error);
         return sendError(res, 500, 'Erro no checkout', error.response?.data?.message || error.message);

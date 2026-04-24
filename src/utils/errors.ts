@@ -25,10 +25,15 @@ export function sendError(
     res: Response,
     statusCode: number,
     error: string,
-    message: string
+    message: string,
+    realError?: unknown
 ): void {
     const requestIdHeader = res.getHeader('x-request-id');
     const requestId = typeof requestIdHeader === 'string' ? requestIdHeader : 'unknown';
+
+    if (realError) {
+        console.error(`[Backend Error Details] RequestId: ${requestId} | ${error}:`, realError);
+    }
 
     const body: StandardErrorResponse = {
         success: false,

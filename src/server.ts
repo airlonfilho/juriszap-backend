@@ -182,6 +182,41 @@ function log(level: LogLevel, message: string, error?: unknown): void {
     console.log(`${prefix} ${message}`);
 }
 
+function isDatajudTimeoutError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+
+    const normalizedMessage = error.message
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+    return (
+        normalizedMessage.includes('timeout ao consultar datajud') ||
+        (normalizedMessage.includes('datajud') && normalizedMessage.includes('timeout'))
+    );
+}
+
+function sendDatajudAwareProcessError(res: Response, error: unknown): void {
+    if (isDatajudTimeoutError(error)) {
+        sendError(
+            res,
+            504,
+            'Datajud indisponível',
+            'O Datajud demorou para responder. Tente novamente em instantes.',
+            error
+        );
+        return;
+    }
+
+    sendError(
+        res,
+        500,
+        'Erro na consulta',
+        'Falha ao consultar processo. Por favor, tente novamente.',
+        error
+    );
+}
+
 function normalizeAndValidateCNJ(value: unknown): string | null {
     if (typeof value !== 'string') return null;
 
@@ -464,12 +499,7 @@ app.get('/api/processos/:numero([0-9.-]+)', async (req: Request, res: Response) 
 
     } catch (error) {
         log('error', 'Erro ao consultar processo por GET', error);
-        sendError(
-            res,
-            500,
-            'Erro na consulta',
-            isProduction ? 'Falha ao consultar processo.' : error instanceof Error ? error.message : 'Erro desconhecido.'
-        );
+        sendDatajudAwareProcessError(res, error);
     }
 });
 
@@ -520,12 +550,7 @@ app.post('/api/processos', async (req: Request, res: Response) => {
 
     } catch (error) {
         log('error', 'Erro ao consultar processo por POST', error);
-        sendError(
-            res,
-            500,
-            'Erro na consulta',
-            isProduction ? 'Falha ao consultar processo.' : error instanceof Error ? error.message : 'Erro desconhecido.'
-        );
+        sendDatajudAwareProcessError(res, error);
     }
 });
 
@@ -567,12 +592,7 @@ app.post('/api/processos/buscar', async (req: Request, res: Response) => {
         });
     } catch (error) {
         log('error', 'Erro ao buscar processo para cadastro', error);
-        sendError(
-            res,
-            500,
-            'Erro na consulta',
-            isProduction ? 'Falha ao consultar processo.' : error instanceof Error ? error.message : 'Erro desconhecido.'
-        );
+        sendDatajudAwareProcessError(res, error);
     }
 });
 
@@ -672,11 +692,24 @@ app.get('/api/processos/:numero([0-9.-]+)/traducao', async (req: Request, res: R
 
     } catch (error) {
         log('error', 'Erro na rota de tradução de movimentação', error);
+
+        if (isDatajudTimeoutError(error)) {
+            sendError(
+                res,
+                504,
+                'Datajud indisponível',
+                'O Datajud demorou para responder. Tente novamente em instantes.',
+                error
+            );
+            return;
+        }
+
         sendError(
             res,
             500,
             'Erro na tradução',
-            getGeminiFriendlyErrorMessage(error)
+            getGeminiFriendlyErrorMessage(error),
+            error
         );
     }
 });
@@ -776,11 +809,24 @@ app.post('/api/processos/traducao-multipla', async (req: Request, res: Response)
 
     } catch (error) {
         log('error', 'Erro na rota de tradução múltipla', error);
+
+        if (isDatajudTimeoutError(error)) {
+            sendError(
+                res,
+                504,
+                'Datajud indisponível',
+                'O Datajud demorou para responder. Tente novamente em instantes.',
+                error
+            );
+            return;
+        }
+
         sendError(
             res,
             500,
             'Erro na tradução',
-            getGeminiFriendlyErrorMessage(error)
+            getGeminiFriendlyErrorMessage(error),
+            error
         );
     }
 });
@@ -1087,6 +1133,17 @@ app.post('/api/meus-processos/salvar', requireAuth, checkProcessLimit, async (re
 
     } catch (error) {
         log('error', 'Erro ao processar salvamento de processo', error);
+
+        if (isDatajudTimeoutError(error)) {
+            sendError(
+                res,
+                504,
+                'Datajud indisponível',
+                'O Datajud demorou para responder. Tente novamente em instantes.'
+            );
+            return;
+        }
+
         sendError(
             res,
             500,

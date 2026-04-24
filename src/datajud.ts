@@ -55,7 +55,11 @@ const DATAJUD_BASE_URL = 'https://api-publica.datajud.cnj.jus.br';
 const CNJ_NUMERO_LENGTH = 20;
 const CNJ_TRIBUNAL_CODE_START = 13;
 const CNJ_TRIBUNAL_CODE_END = 16;
-const DEFAULT_DATAJUD_TIMEOUT_MS = 12000;
+const DEFAULT_DATAJUD_TIMEOUT_MS = 35000;
+const MIN_DATAJUD_TIMEOUT_MS = 5000;
+const MAX_DATAJUD_TIMEOUT_MS = 60000;
+const DEFAULT_DATAJUD_RETRY_ATTEMPTS = 2;
+const DEFAULT_DATAJUD_RETRY_BACKOFF_MS = 1200;
 
 /**
  * Mapeamento de códigos J.TR do CNJ para endpoints do Datajud
@@ -245,7 +249,25 @@ function obterDatajudTimeoutMs(): number {
         return DEFAULT_DATAJUD_TIMEOUT_MS;
     }
 
-    return rawTimeout;
+    return Math.min(Math.max(rawTimeout, MIN_DATAJUD_TIMEOUT_MS), MAX_DATAJUD_TIMEOUT_MS);
+}
+
+function obterDatajudRetryAttempts(): number {
+    const rawAttempts = Number(process.env.DATAJUD_RETRY_ATTEMPTS || DEFAULT_DATAJUD_RETRY_ATTEMPTS);
+    if (!Number.isInteger(rawAttempts) || rawAttempts < 0) {
+        return DEFAULT_DATAJUD_RETRY_ATTEMPTS;
+    }
+
+    return Math.min(rawAttempts, 5);
+}
+
+function obterDatajudRetryBackoffMs(): number {
+    const rawBackoff = Number(process.env.DATAJUD_RETRY_BACKOFF_MS || DEFAULT_DATAJUD_RETRY_BACKOFF_MS);
+    if (!Number.isFinite(rawBackoff) || rawBackoff <= 0) {
+        return DEFAULT_DATAJUD_RETRY_BACKOFF_MS;
+    }
+
+    return rawBackoff;
 }
 
 /**
@@ -268,7 +290,7 @@ function tratarErroDatajud(error: unknown): never {
     if (axios.isAxiosError(error)) {
         const axiosError = error as AxiosError;
 
-        if (axiosError.code === 'ECONNABORTED') {
+        if (isTimeoutError(axiosError)) {
             throw new Error('Timeout ao consultar Datajud. Tente novamente em instantes.');
         }
 
@@ -277,6 +299,53 @@ function tratarErroDatajud(error: unknown): never {
         throw new Error(`Falha na consulta ao Datajud: ${mensagem}`);
     }
     throw error;
+}
+
+function isTimeoutError(error: AxiosError): boolean {
+    return (
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ETIMEDOUT' ||
+        (typeof error.message === 'string' && error.message.toLowerCase().includes('timeout'))
+    );
+}
+
+function isRetriableStatus(status: number): boolean {
+    return [408, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
+function isRetriableDatajudError(error: unknown): boolean {
+    if (!axios.isAxiosError(error)) {
+        return false;
+    }
+
+    if (isTimeoutError(error)) {
+        return true;
+    }
+
+    if (!error.response?.status) {
+        // Erros de rede/transporte sem status HTTP costumam ser transitórios.
+        return true;
+    }
+
+    return isRetriableStatus(error.response.status);
+}
+
+function describeAxiosError(error: AxiosError): string {
+    if (isTimeoutError(error)) {
+        return 'timeout';
+    }
+
+    if (error.response?.status) {
+        return `HTTP ${error.response.status}`;
+    }
+
+    return error.code || 'erro desconhecido';
+}
+
+function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 }
 
 const PARTY_CONTEXT_KEYWORDS = [
@@ -474,51 +543,78 @@ export async function consultarProcesso(
     const numeroCNJ = normalizarNumeroCNJ(numeroProcesso);
     validarNumeroCNJ(numeroCNJ);
     const timeoutMs = obterDatajudTimeoutMs();
+    const retryAttempts = obterDatajudRetryAttempts();
+    const retryBackoffMs = obterDatajudRetryBackoffMs();
+    const totalAttempts = retryAttempts + 1;
 
     const endpoint = obterEndpointTribunal(numeroCNJ);
     const payload = criarPayloadBusca(numeroCNJ);
 
-    try {
-        console.log(`Consultando processo ${numeroProcesso}...`);
-        console.log(`Endpoint: ${endpoint}`);
+    let lastError: unknown;
 
-        const response = await axios.post<ElasticsearchResponse>(endpoint, payload, {
-            headers: {
-                'Authorization': `APIKey ${process.env.DATAJUD_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: timeoutMs,
-        });
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+        try {
+            console.log(`Consultando processo ${numeroProcesso}...`);
+            console.log(`Endpoint: ${endpoint}`);
 
-        const hits = response.data.hits.hits;
+            const response = await axios.post<ElasticsearchResponse>(endpoint, payload, {
+                headers: {
+                    'Authorization': `APIKey ${process.env.DATAJUD_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: timeoutMs,
+            });
 
-        if (hits.length === 0) {
-            console.log('Nenhum processo encontrado.');
-            return null;
+            const hits = response.data.hits.hits;
+
+            if (hits.length === 0) {
+                console.log('Nenhum processo encontrado.');
+                return null;
+            }
+
+            const primeiroHit = hits[0];
+            if (!primeiroHit) {
+                console.log('Resposta inválida do Datajud.');
+                return null;
+            }
+
+            const dadosProcesso = primeiroHit._source;
+            const totalMovimentos = dadosProcesso.movimentos?.length || 0;
+
+            console.log(`Processo encontrado!`);
+            console.log(`Última atualização: ${dadosProcesso.dataUltimaAtualizacao}`);
+            console.log(`Total de movimentações: ${totalMovimentos}`);
+
+            return {
+                classe: dadosProcesso.classe?.nome,
+                dataUltimaAtualizacao: dadosProcesso.dataUltimaAtualizacao,
+                movimentos: dadosProcesso.movimentos,
+                clientesSugeridos: extractSuggestedClientNames(dadosProcesso),
+                partesEnvolvidas: extractPartesEnvolvidas(dadosProcesso),
+            };
+        } catch (error) {
+            lastError = error;
+
+            if (attempt < totalAttempts && isRetriableDatajudError(error)) {
+                const delay = retryBackoffMs * 2 ** (attempt - 1);
+                const axiosError = error as AxiosError;
+
+                console.warn(
+                    `[Datajud] Tentativa ${attempt}/${totalAttempts} falhou (${describeAxiosError(axiosError)}). ` +
+                    `Nova tentativa em ${delay}ms.`
+                );
+
+                await wait(delay);
+                continue;
+            }
+
+            tratarErroDatajud(error);
         }
-
-        const primeiroHit = hits[0];
-        if (!primeiroHit) {
-            console.log('Resposta inválida do Datajud.');
-            return null;
-        }
-
-        const dadosProcesso = primeiroHit._source;
-        const totalMovimentos = dadosProcesso.movimentos?.length || 0;
-
-        console.log(`Processo encontrado!`);
-        console.log(`Última atualização: ${dadosProcesso.dataUltimaAtualizacao}`);
-        console.log(`Total de movimentações: ${totalMovimentos}`);
-
-        return {
-            classe: dadosProcesso.classe?.nome,
-            dataUltimaAtualizacao: dadosProcesso.dataUltimaAtualizacao,
-            movimentos: dadosProcesso.movimentos,
-            clientesSugeridos: extractSuggestedClientNames(dadosProcesso),
-            partesEnvolvidas: extractPartesEnvolvidas(dadosProcesso),
-        };
-
-    } catch (error) {
-        tratarErroDatajud(error);
     }
+
+    if (lastError) {
+        tratarErroDatajud(lastError);
+    }
+
+    return null;
 }

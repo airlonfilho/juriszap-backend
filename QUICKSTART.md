@@ -32,6 +32,9 @@ Edite o arquivo `.env`:
 ```env
 # API do Datajud CNJ
 DATAJUD_API_KEY=sua_chave_api_datajud
+DATAJUD_TIMEOUT_MS=35000
+DATAJUD_RETRY_ATTEMPTS=2
+DATAJUD_RETRY_BACKOFF_MS=1200
 
 # Google Gemini AI (obtenha em: https://aistudio.google.com/app/apikey)
 GEMINI_API_KEY=sua_chave_gemini_aqui

@@ -44,7 +44,9 @@ Crie um arquivo `.env` na raiz do projeto com as seguintes variáveis:
 
 ```env
 DATAJUD_API_KEY=sua_chave_api_datajud
-DATAJUD_TIMEOUT_MS=12000
+DATAJUD_TIMEOUT_MS=35000
+DATAJUD_RETRY_ATTEMPTS=2
+DATAJUD_RETRY_BACKOFF_MS=1200
 GEMINI_API_KEY=sua_chave_gemini_aqui
 GEMINI_TIMEOUT_MS=15000
 SUPABASE_URL=https://seu-projeto.supabase.co
@@ -62,7 +64,9 @@ RATE_LIMIT_MAX=100
 - **DATAJUD_API_KEY**: Solicite acesso à API do CNJ Datajud
 - **GEMINI_API_KEY**: Obtenha gratuitamente em [Google AI Studio](https://aistudio.google.com/app/apikey)
 - **SUPABASE_URL** e **SUPABASE_ANON_KEY**: Configure em [Supabase Dashboard](https://app.supabase.com) → Settings → API
-- **DATAJUD_TIMEOUT_MS**: Timeout da consulta ao Datajud em milissegundos.
+- **DATAJUD_TIMEOUT_MS**: Timeout da consulta ao Datajud em milissegundos (padrão recomendado: 35000).
+- **DATAJUD_RETRY_ATTEMPTS**: Quantidade de retentativas em falhas transitórias (timeout, 429 e erros 5xx).
+- **DATAJUD_RETRY_BACKOFF_MS**: Backoff inicial entre tentativas do Datajud (cresce de forma exponencial).
 - **GEMINI_TIMEOUT_MS**: Timeout das chamadas ao Gemini em milissegundos.
 - **LOG_LEVEL**: Nível de logs (`debug`, `info`, `warn`, `error`). Em produção, use `info` ou `warn`.
 - **CORS_ORIGINS**: Lista de origens permitidas (separadas por vírgula). Em produção, configure explicitamente.

@@ -497,12 +497,7 @@ export async function translateLatestMovement(
         return translationResult;
     } catch (error) {
         console.error('Erro ao traduzir movimentação com OpenRouter:', error);
-
-        if (error instanceof SyntaxError) {
-            throw new Error('A resposta da IA veio em formato inválido. Tente novamente em instantes.');
-        }
-
-        throw new Error(getGeminiFriendlyErrorMessage(error));
+        throw error;
     }
 }
 
